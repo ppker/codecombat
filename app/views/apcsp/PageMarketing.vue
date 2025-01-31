@@ -14,7 +14,8 @@
                 p.text-p {{ $t('apcsp_marketing.page_description_endorsed') }}
             .row.row-request-access
               .col-lg-12
-                a.btn.btn-primary.btn-lg.uppercase(@click="showModal=true") {{ $t('apcsp_marketing.request_access') }}
+                a.btn.btn-primary.btn-lg.uppercase(v-if="hasLicense" href="/apcsportal" :target="checkUsingRoute() ? '_blank' : ''") {{ $t('apcsp_marketing.ap_csp_portal') }}
+                .btn.btn-primary.btn-lg.uppercase(v-if="!hasLicense" @click="showModal=true") {{ $t('apcsp_marketing.request_access') }}
 
     .container-fluid.vector-flow
       .vector.vector-0
@@ -140,7 +141,8 @@
     #get-full-course.container-fluid
       .width-container.row
         .col.col-lg-12
-          a.btn.btn-primary.btn-lg.btn-shadow.uppercase(@click="showModal=true") {{ $t('apcsp_marketing.get_full_course') }}
+          a.btn.btn-primary.btn-lg.btn-shadow.uppercase(v-if="hasLicense" href="/apcsportal" :target="checkUsingRoute() ? '_blank' : ''") {{ $t('apcsp_marketing.get_full_course') }}
+          .btn.btn-primary.btn-lg.btn-shadow.uppercase(v-else @click="showModal=true") {{ $t('apcsp_marketing.get_full_course') }}
     #professional-development.container-fluid.container-fluid-gradient
       .width-container.row
         .col.col-lg-12
@@ -153,6 +155,8 @@
                 img.image18(src="/images/pages/apcsp/IMAGE18.png")
               .col.col-md-6.col-xs-12
                 p.text-p {{ $t('apcsp_marketing.professional_development_description') }}
+            .text-center
+              a.btn.btn-margin.btn-primary.btn-lg.btn-light-shadow.uppercase(href="https://drive.google.com/file/d/1ACNZVW6Kqs6wGf_WMjOUjBC1Mh5PiBRW/view?usp=drive_link", target="_blank") {{ $t('general.learn_more') }}
 
     //- html structure copied and modified from home page
     #teachers-love-codecombat.width-container.row.text-center
@@ -203,16 +207,18 @@
               .col-md-6
                 .question {{ $t('apcsp_marketing.question_3') }}
                 .answer(v-html="$t('apcsp_marketing.answer_3', i18nData)")
-    modal-apcsp-contact(v-if="showModal" @close="showModal = false")
+    modal-get-licenses(v-if="showModal" @close="showModal = false" :subtitle="'Let us know if you have any questions or requests regarding our AP CSP curriculum.'")
 </template>
 
 <script>
-import { mapActions, mapGetters } from 'vuex'
-import ModalAPCSPContact from 'app/components/common/ModalAPCSPContact.vue'
+import { mapActions, mapGetters, mapMutations } from 'vuex'
+import { COMPONENT_NAMES, PAGE_TITLES } from '../../../ozaria/site/components/teacher-dashboard/common/constants.js'
+import ModalGetLicenses from '../../components/common/ModalGetLicenses.vue'
 
 export default Vue.extend({
+  name: COMPONENT_NAMES.APCSP,
   components: {
-    'modal-apcsp-contact': ModalAPCSPContact
+    'modal-get-licenses': ModalGetLicenses,
   },
   data () {
     return {
@@ -271,33 +277,49 @@ export default Vue.extend({
       hasLicense: false
     }
   },
+  computed: {
+    ...mapGetters({
+      teacherPrepaids: 'prepaids/getPrepaidsByTeacher',
+      isPaidTeacher: 'me/isPaidTeacher'
+    })
+  },
+  mounted () {
+    if (this.$route.path.startsWith('/teachers/apcsp')) {
+      this.startLoading()
+      this.setComponentName(this.$options.name)
+      this.fetchData({ componentName: this.$options.name, options: { loadedEventName: 'Teacher Dashboard / APCSP: Loaded' } })
+    }
+    this.setPageTitle(PAGE_TITLES[this.$options.name])
+  },
   async created () {
     this.me = me
     if (me.isTeacher()) {
       this.updateLicenseStatus()
     }
   },
-  computed: {
-    ...mapGetters({
-      teacherPrepaids: 'prepaids/getPrepaidsByTeacher'
-    })
-  },
   methods: {
     ...mapActions({
-      fetchTeacherPrepaids: 'prepaids/fetchPrepaidsForTeacher'
+      fetchTeacherPrepaids: 'prepaids/fetchPrepaidsForTeacher',
+      fetchData: 'teacherDashboard/fetchData',
     }),
+
+    ...mapMutations({
+      setPageTitle: 'teacherDashboard/setPageTitle',
+      setComponentName: 'teacherDashboard/setComponentName',
+      startLoading: 'teacherDashboard/startLoading'
+    }),
+
+    checkUsingRoute () {
+      return this.$route?.path === '/teachers/apcsp'
+    },
+
     async updateLicenseStatus () {
-      if (me.isPaidTeacher()) {
-        this.hasLicense = true
-        return
-      }
       await this.fetchTeacherPrepaids({ teacherId: me.get('_id') })
-      const prepaids = this.teacherPrepaids(me.get('_id'))
-      if (prepaids.available.length > 0) {
+      if (this.isPaidTeacher) {
         this.hasLicense = true
       }
     }
-  }
+  },
 })
 </script>
 
@@ -403,6 +425,10 @@ p, .text-p {
     background-color: $yellow-light;
     transition: background-color .35s;
   }
+}
+
+.btn-margin {
+  margin-top: 10px;
 }
 
 #apcsp-marketing-page {
@@ -1287,6 +1313,10 @@ p, .text-p {
 
   .btn-shadow {
     filter: drop-shadow(0px 0px 20px #000000);
+  }
+
+  .btn-light-shadow {
+    filter: drop-shadow(0px 0px 20px #0E4C60);
   }
 
   .text-footer-blurb {

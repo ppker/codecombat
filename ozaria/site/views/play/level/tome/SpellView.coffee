@@ -19,6 +19,7 @@ TokenIterator = ace.require('ace/token_iterator').TokenIterator
 LZString = require 'lz-string'
 utils = require 'core/utils'
 Aether = require 'lib/aether/aether'
+aetherUtils = require 'lib/aether_utils'
 AceDiff = require 'ace-diff'
 store = require 'core/store'
 require('app/styles/play/level/tome/ace-diff-spell.sass')
@@ -58,7 +59,6 @@ module.exports = class SpellView extends CocoView
     'tome:update-snippets': 'addAutocompleteSnippets'
     'tome:insert-snippet': 'onInsertSnippet'
     'tome:spell-beautify': 'onSpellBeautify'
-    'tome:maximize-toggled': 'onMaximizeToggled'
     'tome:problems-updated': 'onProblemsUpdated'
     'script:state-changed': 'onScriptStateChange'
     'playback:ended-changed': 'onPlaybackEndedChanged'
@@ -95,13 +95,14 @@ module.exports = class SpellView extends CocoView
     @addUserSnippets = _.debounce @reallyAddUserSnippets, 500, {maxWait: 1500}
     @loadedToken = {}
     @addUserSnippets = _.debounce @reallyAddUserSnippets, 500, {maxWait: 1500, leading: true, trailing: false}
+    @teaching = utils.getQueryVariable('teaching', false) # not enable in ozaria for now, always false
 
   afterRender: ->
     super()
     @createACE()
     @createACEShortcuts()
     @hookACECustomBehavior()
-    if (me.isAdmin() or utils.getQueryVariable 'ai') and not @spectateView
+    unless @spectateView
       @fillACESolution()
     @fillACE()
     @createOnCodeChangeHandlers()
@@ -266,10 +267,6 @@ module.exports = class SpellView extends CocoView
       bindKey: {win: 'Ctrl-L', mac: 'Command-L'}
       passEvent: true
       exec: ->  # just prevent default ACE go-to-line alert
-    addCommand
-      name: 'open-fullscreen-editor'
-      bindKey: {win: 'Ctrl-Shift-M', mac: 'Command-Shift-M|Ctrl-Shift-M'}
-      exec: -> Backbone.Mediator.publish 'tome:toggle-maximize', {}
     addCommand
       # TODO: Restrict to beginner campaign levels like we do backspaceThrottle
       name: 'enter-skip-delimiters'
@@ -437,6 +434,8 @@ module.exports = class SpellView extends CocoView
       solution = ''
     @aceSolution.setValue solution
     @aceSolution.clearSelection()
+    if @courseID && @courseID == utils.courseIDs.CHAPTER_ONE
+      @aceSolution.setFontSize 22
     @aceSolutionLastLineCount = 0
     @updateSolutionLines = _.throttle @updateSolutionLines, 1000
 
@@ -510,7 +509,6 @@ module.exports = class SpellView extends CocoView
     if not lockDefaultCode or (_.isNumber(lockDefaultCode) and lockDefaultCode < me.level())
       return
     return unless @spell.source is @spell.originalSource or force
-    return if @isIE()  # Temporary workaround for #2512
     aceConfig = me.get('aceConfig') ? {}
     return if aceConfig.keyBindings and aceConfig.keyBindings isnt 'default'  # Don't lock in vim/emacs mode
 
@@ -674,32 +672,6 @@ module.exports = class SpellView extends CocoView
     @updateACEText newSource
     _.delay (=> @recompile?()), 1000
 
-  createFirepad: ->
-    # Currently not called; could be brought back for future multiplayer modes.
-    # Load from firebase or the original source if there's nothing there.
-    return if @firepadLoading
-    @eventsSuppressed = true
-    @loaded = false
-    @previousSource = @ace.getValue()
-    @ace.setValue('')
-    @aceSession.setUndoManager(new UndoManager())
-    fireURL = 'https://codecombat.firebaseio.com/' + @spell.pathComponents.join('/')
-    @fireRef = new Firebase fireURL
-    firepadOptions = userId: me.id
-    @firepad = Firepad.fromACE @fireRef, @ace, firepadOptions
-    @firepadLoading = true
-    @firepad.on 'ready', =>
-      return if @destroyed
-      @firepadLoading = false
-      firepadSource = @ace.getValue()
-      if firepadSource
-        @spell.source = firepadSource
-      else
-        @ace.setValue @previousSource
-        @aceSession.setUndoManager(new UndoManager())
-        @ace.clearSelection()
-      @onAllLoaded()
-
   onAllLoaded: =>
     @fetchToken(@spell.source, @spell.language).then (token) =>
       @spell.transpile token
@@ -778,11 +750,11 @@ module.exports = class SpellView extends CocoView
     Backbone.Mediator.publish 'tome:spell-changed', spell: @spell
 
   notifyEditingEnded: =>
-    return if @destroyed or @aceDoc.undergoingFirepadOperation  # from my Firepad ACE adapter
+    return if @destroyed
     Backbone.Mediator.publish 'tome:editing-ended', {}
 
   notifyEditingBegan: =>
-    return if @destroyed or @aceDoc.undergoingFirepadOperation  # from my Firepad ACE adapter
+    return if @destroyed
     Backbone.Mediator.publish 'tome:editing-began', {}
 
   updateSolutionLines: (screenLineCount, ace, aceCls, areaId) =>
@@ -790,42 +762,18 @@ module.exports = class SpellView extends CocoView
     @updateAceLines(screenLineCount, ace, aceCls, areaId)
 
   updateAceLines: (screenLineCount, ace=@ace, aceCls='.ace', areaId='#code-area') =>
-    lineHeight = ace.renderer.lineHeight or 20
-    spellPaletteView = $('#tome-view #spell-palette-view-bot')
-    spellTopBarHeight = $('#spell-top-bar-view').outerHeight()
-    if aceCls == '.ace'
-      spellPaletteHeight = spellPaletteView.outerHeight()
-    else
-      spellPaletteHeight = 0
-    windowHeight = $(window).innerHeight()
-    spellPaletteAllowedHeight = Math.min spellPaletteHeight, windowHeight / 2
-    topOffset = $(aceCls).offset().top
+    lineHeight = ace.renderer.lineHeight or 21
+    if @courseID && @courseID == utils.courseIDs.CHAPTER_ONE
+      lineHeight = 29
+    goalsViewHeight = $('#goals-view').outerHeight()
     gameHeight = $('#game-area').innerHeight()
-    heightScale = if aceCls == '.ace' then 1 else 0.5
+    buttonsHeight = $('.spell-toolbar-view').outerHeight()
 
-    # If the spell palette is too tall, we'll need to shrink it.
-    maxHeightOffset = 75
-    minHeightOffset = 175
-    maxHeight = Math.min(windowHeight, Math.max(windowHeight, 600)) - topOffset - spellPaletteAllowedHeight - maxHeightOffset
-    minHeight = Math.min maxHeight * heightScale, Math.min(gameHeight, Math.max(windowHeight, 600)) - spellPaletteHeight - minHeightOffset
-
-    spellPalettePosition = if spellPaletteHeight > 0 then 'bot' else 'mid'
-    minLinesBuffer = if spellPalettePosition is 'bot' then 0 else 2
-    linesAtMinHeight = Math.max(8, Math.floor(minHeight / lineHeight - minLinesBuffer))
-    linesAtMaxHeight = Math.floor(maxHeight / lineHeight)
-    lines = Math.max linesAtMinHeight, Math.min(screenLineCount + 2, linesAtMaxHeight), 8
+    codeHeight = gameHeight - goalsViewHeight - buttonsHeight
+    lines = Math.floor(codeHeight / lineHeight)
     lines = 8 if _.isNaN lines
 
     ace.setOptions minLines: lines, maxLines: lines
-
-    # If bot: move spell palette up, slightly overlapping us.
-    newTop = 185 + lineHeight * lines
-    if aceCls == '.ace'
-      spellPaletteView.css('top', newTop)
-
-      codeAreaBottom = if spellPaletteHeight then windowHeight - (newTop + spellPaletteHeight + 20) else 0
-      $(areaId).css('bottom', codeAreaBottom)
-    #console.log { lineHeight, spellTopBarHeight, spellPaletteHeight, spellPaletteAllowedHeight, windowHeight, topOffset, gameHeight, minHeight, maxHeight, linesAtMinHeight, linesAtMaxHeight, lines, newTop, screenLineCount }
 
   updateLines: =>
     # Make sure there are always blank lines for the player to type on, and that the editor resizes to the height of the lines.
@@ -918,12 +866,9 @@ module.exports = class SpellView extends CocoView
 
   updateACEText: (source) ->
     @eventsSuppressed = true
-    if @firepad
-      @firepad.setText source
-    else
-      @ace.setValue source
-      @ace.clearSelection()
-      @aceSession.setUndoManager(new UndoManager())
+    @ace.setValue source
+    @ace.clearSelection()
+    @aceSession.setUndoManager(new UndoManager())
     @eventsSuppressed = false
     try
       @ace.resize true  # hack: @ace may not have updated its text properly, so we force it to refresh
@@ -982,19 +927,9 @@ module.exports = class SpellView extends CocoView
   # - Problem alerts and ranges will only show on fully cast worlds. Annotations will show continually.
 
   fetchToken: (source, language) =>
-    if language not in ['java', 'cpp']
-      return Promise.resolve(source)
-    else if source of @loadedToken
+    if source of @loadedToken
       return Promise.resolve(@loadedToken[source])
-
-    headers =  { 'Accept': 'application/json', 'Content-Type': 'application/json' }
-    service = window?.localStorage?.kodeKeeperService or "https://asm14w94nk.execute-api.us-east-1.amazonaws.com/service/parse-code-kodekeeper"
-    fetch service, {method: 'POST', mode:'cors', headers:headers, body:JSON.stringify({code: source, language: language})}
-    .then (x) => x.json()
-    .then (x) =>
-      @loadedToken = {} # only cache 1 source
-      @loadedToken[source] = x.token;
-      return x.token
+    return aetherUtils.fetchToken(source, language)
 
   fetchTokenForSource: () =>
     source = @ace.getValue()
@@ -1469,9 +1404,6 @@ module.exports = class SpellView extends CocoView
     pretty = @spellThang.aether.beautify(ugly.replace /\bloop\b/g, 'while (__COCO_LOOP_CONSTRUCT__)').replace /while \(__COCO_LOOP_CONSTRUCT__\)/g, 'loop'
     @ace.setValue pretty
 
-  onMaximizeToggled: (e) ->
-    _.delay (=> @resize()), 500 + 100  # Wait $level-resize-transition-time, plus a bit.
-
   onWindowResize: (e) =>
     @spellPaletteHeight = null
     #$('#spell-palette-view').css 'height', 'auto'  # Let it go back to controlling its own height
@@ -1588,7 +1520,6 @@ module.exports = class SpellView extends CocoView
   destroy: ->
     $(@ace?.container).find('.ace_gutter').off 'click mouseenter', '.ace_error, .ace_warning, .ace_info'
     $(@ace?.container).find('.ace_gutter').off()
-    @firepad?.dispose()
     @ace?.commands.removeCommand command for command in @aceCommands
     @ace?.destroy()
     @aceDoc?.off 'change', @onCodeChangeMetaHandler

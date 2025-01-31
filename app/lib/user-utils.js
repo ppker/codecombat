@@ -1,22 +1,30 @@
 const usersApi = require('../core/api').users
 const localStorage = require('../core/storage')
+const globalVar = require('../core/globalVar')
+const _ = require('lodash')
 
-function provisionPremium () {
-  usersApi.provisionSubscription({ userId: me.get('_id') })
-    .then(({ premiumAdded, isInLibraryNetwork, hideEmail, libraryName, showLoginModal, isCreatedViaLibrary }) => {
-      handleStorage(libraryNetworkLSKey(), isInLibraryNetwork, 24 * 60)
-      handleStorage(hideEmailLibraryKey(), hideEmail, 24 * 60)
-      handleStorage(showLibraryLoginModalKey(), showLoginModal, 60)
-      handleStorage(isCreatedViaLibraryKey(), isCreatedViaLibrary, 24 * 60)
-      handleStorage(libraryNameKey(), libraryName, 24 * 60)
+function extraProvisions () {
+  usersApi.extraProvisions({ userId: me.get('_id') })
+    .then(({ provisionType, ...obj }) => {
+      if (provisionType === 'library') {
+        const { premiumAdded, isInLibraryNetwork, hideEmail, libraryName, showLoginModal, isCreatedViaLibrary } = obj
+        handleStorage(libraryNetworkLSKey(), isInLibraryNetwork, 24 * 60)
+        handleStorage(hideEmailLibraryKey(), hideEmail, 24 * 60)
+        handleStorage(showLibraryLoginModalKey(), showLoginModal, 60)
+        handleStorage(isCreatedViaLibraryKey(), isCreatedViaLibrary, 24 * 60)
+        handleStorage(libraryNameKey(), libraryName, 24 * 60)
 
-      const lib = me.get('library') || {}
-      if (!lib.name && libraryName) {
-        lib.name = libraryName
-        me.set('library', lib)
-        me.save()
+        const lib = me.get('library') || {}
+        if (!lib.name && libraryName) {
+          lib.name = libraryName
+          me.set('library', lib)
+          me.save()
+        }
+        if (premiumAdded) me.fetch({ cache: false })
+      } else if (provisionType === 'teacher') {
+        const { esportsAdded } = obj
+        if (esportsAdded) me.fetch({ cache: false })
       }
-      if (premiumAdded) me.fetch({ cache: false })
     })
     .catch((err) => {
       console.error('provision err', err)
@@ -100,6 +108,18 @@ async function levelChatCreditsString () {
   }
 }
 
+function updateUserCreditsMessage () {
+  if (globalVar.fetchingCreditsString) return
+
+  globalVar.fetchingCreditsString = true
+  levelChatCreditsString().then(msg => {
+    if (msg !== globalVar.userCreditsMessage) {
+      globalVar.userCreditsMessage = msg
+      Backbone.Mediator.publish('auth:user-credits-message-updates', {})
+    }
+    globalVar.fetchingCreditsString = false
+  })
+}
 function hasSeenParentBuyingforSelfPrompt () {
   return !!localStorage.load(parentBuyingforSelfPromptKey())
 }
@@ -112,8 +132,37 @@ function markParentBuyingForSelfPromptSeen () {
   localStorage.save(parentBuyingforSelfPromptKey(), true, 24 * 60)
 }
 
+function getStorageExam () {
+  const me = window.me
+  return localStorage.load(`exam-${me.id}`, true)
+}
+
+function levelsOfExam (exam) {
+  if (!exam) { return [] }
+  const levels = []
+  exam.problems.forEach((course) => {
+    const courseId = course.courseId
+    course.levels.forEach(level => {
+      levels.push({
+        ...level,
+        courseId,
+      })
+    })
+  })
+  return levels
+}
+
+function levelNumberInExam (slug) {
+  const exam = getStorageExam()
+  if (!exam) {
+    return 0
+  }
+  const levels = levelsOfExam(exam)
+  return _.findIndex(levels, { slug }) + 1
+}
+
 module.exports = {
-  provisionPremium,
+  extraProvisions,
   isInLibraryNetwork,
   shouldHideEmail,
   libraryName,
@@ -122,5 +171,9 @@ module.exports = {
   levelChatCreditsString,
   isCreatedViaLibrary,
   hasSeenParentBuyingforSelfPrompt,
-  markParentBuyingForSelfPromptSeen
+  markParentBuyingForSelfPromptSeen,
+  updateUserCreditsMessage,
+  getStorageExam,
+  levelsOfExam,
+  levelNumberInExam,
 }

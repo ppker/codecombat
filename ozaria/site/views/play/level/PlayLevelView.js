@@ -62,6 +62,7 @@ const GameMenuModal = require('views/play/menu/GameMenuModal')
 const TutorialPlayView = require('./TutorialPlayView').default
 const ThangTypeHUDComponent = require('./ThangTypeHUDComponent').default
 const ScreenReaderSurfaceView = require('app/views/play/level/ScreenReaderSurfaceView')
+const AskAIHelpView = require('views/play/level/AskAIHelpView').default
 
 require('lib/game-libraries')
 window.Box2D = require('exports-loader?Box2D!vendor/scripts/Box2dWeb-2.1.a.3')
@@ -189,9 +190,14 @@ class PlayLevelView extends RootView {
       const fetchAceConfig = $.get(`/db/course_instance/${this.courseInstanceID}/classroom?project=aceConfig,members`)
       this.supermodel.trackRequest(fetchAceConfig)
       fetchAceConfig.then(classroom => {
-        this.classroomAceConfig.liveCompletion = classroom.aceConfig?.liveCompletion || true
-        this.classroomAceConfig.levelChat = classroom.aceConfig?.levelChat || 'none'
+        this.classroomAceConfig.liveCompletion = classroom.aceConfig?.liveCompletion != null ? classroom.aceConfig.liveCompletion : true
+        const levelChat = classroom.aceConfig?.levelChat || 'none'
+        this.classroomAceConfig.levelChat = levelChat
+        store.commit('game/setAIHintVisible', levelChat !== 'none')
       })
+    }
+    if (me.isTeacher()) {
+      store.commit('game/setAIHintVisible', true)
     }
 
     return this.listenTo(
@@ -594,9 +600,6 @@ class PlayLevelView extends RootView {
     ) {
       return
     }
-    const useHero =
-      /hero/.test(spell.getSource()) ||
-      !/(self[\.\:]|this\.|\@)/.test(spell.getSource())
     if (this.spellPaletteView && !this.spellPaletteView.destroyed) {
       this.removeSubView(this.spellPaletteView)
     }
@@ -614,8 +617,7 @@ class PlayLevelView extends RootView {
         session: this.session,
         level: this.level,
         courseID: this.courseID,
-        courseInstanceID: this.courseInstanceID,
-        useHero
+        courseInstanceID: this.courseInstanceID
       })
     )
   }
@@ -767,57 +769,11 @@ class PlayLevelView extends RootView {
   // Load Completed Setup ######################################################
 
   onSessionLoaded (e) {
-    let left1
     store.commit('game/setTimesCodeRun', e.session.get('timesCodeRun') || 0)
     store.commit(
       'game/setTimesAutocompleteUsed',
       e.session.get('timesAutocompleteUsed') || 0
     )
-    if (this.session) {
-      return
-    }
-    // Just the level and session have been loaded by the level loader
-    if (
-      e.level.isType('hero', 'hero-ladder', 'hero-coop') &&
-      !_.size(
-        (left1 = __guard__(e.session.get('heroConfig'), x => x.inventory)) !=
-          null
-          ? left1
-          : {}
-      ) &&
-      e.level.get('assessment') !== 'open-ended'
-    ) {
-      // Delaying this check briefly so LevelLoader.loadDependenciesForSession has a chance to set the heroConfig on the level session
-      return _.defer(() => {
-        let left2
-        if (
-          _.size(
-            (left2 = __guard__(
-              e.session.get('heroConfig'),
-              x1 => x1.inventory
-            )) != null
-              ? left2
-              : {}
-          )
-        ) {
-          return
-        }
-        // TODO: which scenario is this executed for?
-        if (this.setupManager != null) {
-          this.setupManager.destroy()
-        }
-        this.setupManager = new LevelSetupManager({
-          supermodel: this.supermodel,
-          level: e.level,
-          levelID: this.levelID,
-          parent: this,
-          session: e.session,
-          courseID: this.courseID,
-          courseInstanceID: this.courseInstanceID
-        })
-        return this.setupManager.open()
-      })
-    }
   }
 
   onLoaded () {
@@ -1707,6 +1663,10 @@ class PlayLevelView extends RootView {
     window.Backbone.Mediator.publish('level:close-solution', {})
   }
 
+  onClickAIHint () {
+    this.openModalView(new AskAIHelpView({}))
+  }
+
   onSpellChanged () {
     // This is triggered at very confusing times - for example when a capstone game is about to begin. At that
     // time, the code has not actually changed, but it is being built.
@@ -1810,7 +1770,8 @@ PlayLevelView.prototype.subscriptions = {
   'tome:manual-cast': 'onRunCode',
   'tome:spell-changed': 'onSpellChanged',
   'tome:update-aether-running': 'updateAetherRunning',
-  'world:update-key-value-db': 'updateKeyValueDb'
+  'world:update-key-value-db': 'updateKeyValueDb',
+  'level:click-ai-hint': 'onClickAIHint'
 }
 
 PlayLevelView.prototype.events = {
@@ -1820,9 +1781,6 @@ PlayLevelView.prototype.events = {
   },
   'click #stop-cinematic-playback-button' () {
     return Backbone.Mediator.publish('playback:stop-cinematic-playback', {})
-  },
-  'click #fullscreen-editor-background-screen' (e) {
-    return Backbone.Mediator.publish('tome:toggle-maximize', {})
   },
   'click .contact-link': 'onContactClicked',
   'contextmenu #webgl-surface': 'onSurfaceContextMenu',

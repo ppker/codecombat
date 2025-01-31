@@ -46,6 +46,7 @@ module.exports = class LevelChatView extends CocoView
     @regularlyClearOldMessages()
     @playNoise = _.debounce(@playNoise, 100)
     @diffShown = false
+    @creditUid = undefined
 
   updateMultiplayerVisibility: ->
     return unless @$el?
@@ -93,11 +94,11 @@ module.exports = class LevelChatView extends CocoView
     #content = content.replace /\|Code\|?:? ?`{0,3}\n?((.|\n)*?)`{0,3}\n?$/g, '```$1```'
     content = content.replace /\|Code\|?:? ?\n?```.*?\n((.|\n)*?)```\n?/g, (match, p1) =>
       @lastFixedCode = p1
+      if p1
+        Backbone.Mediator.publish 'level:update-solution', code: p1
       '[Show Me]'
     content = content.replace /\|Code\|?:? ?\n?`{0,3}.*?\n((.|\n)*?)`{0,3}\n?$/g, ( match, p1) ->
       numberOfLines = (p1.match(/\n/g) || []).length + 1
-      if p1
-        Backbone.Mediator.publish 'level:update-solution', code: p1
       '\n[Show Me]\n*Loading code fix' + '.'.repeat(numberOfLines) + '...*'
     # Close any unclosed backticks delimiters so we get complete <code> tags
     unclosedBackticks = (content.match(/`/g) || []).length
@@ -155,7 +156,7 @@ module.exports = class LevelChatView extends CocoView
         tr.addClass('me')
         avatarTd = $("<div class='td player-avatar-cell avatar-cell'><a href='/editor/chat/#{messageId or ''}' target='_blank'><img class='avatar' src='/db/user/#{me.id}/avatar?s=80' alt='Player'></a></div>")
       else
-        avatarImg = if utils.isCodeCombat then '/images/level/baby-frifin.png' else '/images/ozaria/avatar-selector/avatar_ghost.png'
+        avatarImg = if utils.isCodeCombat then '/images/level/baby-griffin.png' else '/images/ozaria/avatar-selector/avatar_ghost.png'
         avatarTd = $("<div class='td chatbot-avatar-cell avatar-cell'><a href='/editor/chat/#{messageId or ''}' target='_blank'><img class='avatar' src='#{avatarImg}' alt='AI'></a></div>")
       tr.addClass 'streaming' if message.streaming
       mbody.append(avatarTd)
@@ -201,8 +202,9 @@ module.exports = class LevelChatView extends CocoView
 
   onIconClick: (e) ->
     @open = not @open
-    openPanel = $('.open-chat-area', @$el).toggle @open
-    closedPanel = $('.closed-chat-area', @$el).toggle not @open
+    openPanel = @$('.open-chat-area', @$el).toggle @open
+    closedPanel = @$('.closed-chat-area', @$el).toggle not @open
+    @$('i.icon-comment').toggle true if @open
     @scrollDown()
     if window.getSelection?
       sel = window.getSelection()
@@ -234,12 +236,18 @@ module.exports = class LevelChatView extends CocoView
     @checkCreditsAndAddMessage(e.message)
 
   checkCreditsAndAddMessage: (message) ->
+    if @creditUid
+      # console.log('too many attempts')
+      noty({text: 'too many attempts, please try again later', layout: 'topRight', type: 'error', timeout: 3000})
+      return
+
     uuid = crypto.randomUUID() || Date.now()
     event = 'LevelChatBot Clicked'
     props = { lid: @levelID, ls: @sessionID, redeem: false }
+    @creditUid = "#{uuid}|#{message.slice(0, 20)}"
     userCreditApi.redeemCredits({
       operation: 'LEVEL_CHAT_BOT',
-      id: "#{uuid}|#{message.slice(0, 20)}"
+      id: @creditUid
     })
       .then (res) =>
         props.redeem = true
@@ -312,12 +320,21 @@ module.exports = class LevelChatView extends CocoView
 
   onChatMessageSaved: (chatMessage) ->
     @onNewMessage message: chatMessage.get('message'), messageId: chatMessage.get('_id')  # TODO: temporarily putting this after save so we have message id link
+    if @creditUid
+      creditUid = @creditUid
+      @creditUid = undefined
+      userCreditApi.updateCreditUid({
+        operation: 'LEVEL_CHAT_BOT',
+        uid: creditUid,
+        newId: chatMessage.get('_id')
+      })
+
     return if chatMessage.get('message')?.sender?.kind is 'bot'
     #fetchJson("/db/chat_message/#{chatMessage.id}/ai-response").then @onChatResponse
     @fetchChatMessageStream chatMessage.id
 
   fetchChatMessageStream: (chatMessageId) ->
-    model = utils.getQueryVariable('model') or 'gpt-4-1106-preview' # or 'gpt-4'
+    model = utils.getQueryVariable('model') or 'gpt-4o'
     fetch("/db/chat_message/#{chatMessageId}/ai-response?model=#{model}").then co.wrap (response) =>
       reader = response.body.getReader()
       decoder = new TextDecoder('utf-8')

@@ -18,15 +18,16 @@ const RootView = require('views/core/RootView')
 const cocoTemplate = require('templates/coco-home-view')
 const ozarTemplate = require('templates/ozar-home-view')
 const utils = require('core/utils')
-let storage = require('core/storage')
 const { logoutUser, me } = require('core/auth')
 const CreateAccountModal = require('views/core/CreateAccountModal/CreateAccountModal')
 const GetStartedSignupModal = require('app/views/teachers/GetStartedSignupModal').default
+const GetLicensesModal = require('app/views/core/GetLicensesModal').default
+const ModalJunior = require('app/views/home/ModalJunior').default
+const store = require('core/store')
+
 const paymentUtils = require('app/lib/paymentUtils')
 const fetchJson = require('core/api/fetch-json')
 const DOMPurify = require('dompurify')
-const MineModal = require('views/core/MineModal') // Roblox modal
-storage = require('core/storage')
 
 const PRODUCT_SUFFIX = utils.isCodeCombat ? 'coco' : 'ozar'
 module.exports = (HomeView = (function () {
@@ -59,6 +60,7 @@ module.exports = (HomeView = (function () {
         'click .carousel-dot': 'onCarouselDirectMove',
         'click .carousel-tab': 'onCarouselDirectMovev2',
         'click .request-quote': 'onClickRequestQuote',
+        'click .modal-request-quote': 'onClickRequestQuoteModal',
         'click .logout-btn': 'logoutAccount',
         'click .setup-class-btn': 'onClickSetupClass',
         'click .try-chapter-1': 'onClickGenericTryChapter1',
@@ -93,7 +95,7 @@ module.exports = (HomeView = (function () {
         title: $.i18n.t('new_home.title_' + PRODUCT_SUFFIX),
         meta: [
           { vmid: 'meta-description', name: 'description', content: $.i18n.t('new_home.meta_description_' + PRODUCT_SUFFIX) },
-          { vmid: 'viewport', name: 'viewport', content: 'width=device-width, initial-scale=1' }
+          { vmid: 'viewport', name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' }
         ],
         link: [
           { vmid: 'rel-canonical', rel: 'canonical', href: '/' }
@@ -102,13 +104,18 @@ module.exports = (HomeView = (function () {
     }
 
     getBanner () {
-      return fetchJson('/db/banner').then(data => {
+      return fetchJson('/db/banner', { data: { cacheEdge: true } }).then(data => {
         if (!data) { return }
         this.banner = data
         const content = utils.i18n(data, 'content')
         this.banner.display = DOMPurify.sanitize(marked(content != null ? content : ''))
         return this.renderSelectors('#top-banner')
       })
+    }
+
+    onClickRequestQuoteModal () {
+      const modal = new GetLicensesModal()
+      return this.openModalView(modal)
     }
 
     onClickRequestQuote (e) {
@@ -163,6 +170,9 @@ module.exports = (HomeView = (function () {
       if (this.getStartedSignupContainer) {
         this.getStartedSignupContainer.$destroy()
         return this.getStartedSignupModal.remove()
+      }
+      if (this.juniorModal) {
+        this.juniorModal.$destroy()
       }
     }
 
@@ -303,8 +313,6 @@ module.exports = (HomeView = (function () {
         }
       }
 
-      _.defer(() => { if (!storage.load('roblox-clicked') && !this.destroyed) { return this.openModalView(new MineModal()) } })
-
       if (utils.isCodeCombat) {
         let needle, needle1, paymentResult, title, type
         if ((needle = utils.getQueryVariable('payment-studentLicenses'), ['success', 'failed'].includes(needle)) && !this.renderedPaymentNoty) {
@@ -344,6 +352,7 @@ module.exports = (HomeView = (function () {
           return $('[data-slide-to=\'' + nextActiveSlide + '\']').addClass('active')
         })))
       }
+
       return super.afterRender()
     }
 
@@ -362,6 +371,10 @@ module.exports = (HomeView = (function () {
 
     afterInsert () {
       super.afterInsert()
+
+      const juniorModalContaniner = document.getElementById('junior-modal')
+      this.juniorModal = new ModalJunior({ el: juniorModalContaniner, store })
+
       // scroll to the current hash, once everything in the browser is set up
       const f = () => {
         if (this.destroyed) { return }
